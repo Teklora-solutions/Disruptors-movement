@@ -1,7 +1,8 @@
-import { Controller, Get, Query, Param, Post, Body, Patch, Delete, UseGuards, Req } from '@nestjs/common';
+import { Controller, Get, Query, Param, Post, Body, Patch, Delete, UseGuards, Req, Header } from '@nestjs/common';
 import { OrganisationsService } from './organisations.service';
 import { CreateOrganisationDto, UpdateOrganisationDto } from './dto/organisation.dto';
 import { Public } from '../auth/public.decorator';
+import { PUBLIC_LIST_CACHE } from '../lib/cache-control';
 import { Request } from 'express';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
 
@@ -12,6 +13,7 @@ export class OrganisationsController {
 
   @Public()
   @Get()
+  @Header('Cache-Control', PUBLIC_LIST_CACHE)
   @ApiOperation({ summary: 'Public list of organisations with optional filters' })
   @ApiResponse({ status: 200, description: 'List returned' })
   async list(
@@ -25,8 +27,10 @@ export class OrganisationsController {
       slug,
       isActive: isActive === undefined ? undefined : isActive === 'true',
       search,
-      skip: skip ? Number(skip) : undefined,
-      take: take ? Number(take) : undefined,
+      // Clamped rather than validated: a bad value falls back to the default
+      // instead of reaching Prisma as NaN (a 500), and take is capped at 100.
+      skip: clampInt(skip, 0, 0, Number.MAX_SAFE_INTEGER),
+      take: clampInt(take, 20, 1, 100),
     });
   }
 
@@ -63,3 +67,7 @@ export class OrganisationsController {
   }
 }
 
+function clampInt(raw: string | undefined, fallback: number, min: number, max: number): number {
+  const n = Number.parseInt(raw ?? '', 10);
+  return Number.isNaN(n) ? fallback : Math.min(Math.max(n, min), max);
+}

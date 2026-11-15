@@ -1,37 +1,191 @@
-version: '3.9'
+# Production stack. On the server:  docker compose up -d --build
+# (Local development uses docker-compose.dev.yml for Postgres and Redis only.)
+#
+#   Browser --HTTPS--> Cloudflare (caches public GET /api lists) --tunnel--> cloudflared
+#       /api/*   --> api:4000 (NestJS) --> PostgreSQL, Redis
+#       anything --> web:3000 (Next.js)
+#
+# The /api/* route is a tunnel rule in the Cloudflare dashboard (deploy/README.md).
+# Sending it straight to the API skips the Next.js proxy hop, which cost about
+# as much CPU as the API call itself. If the rule is missing, web's own /api
+# rewrite still forwards the request, just more slowly.
+#
+# No `ports:` anywhere: the tunnel is the only way in. Network layout:
+#   edge    cloudflared + web.  Has an Internet route (cloudflared needs it).
+#   app     cloudflared + web + api, internal. How the tunnel and web reach the API.
+#   data    db + redis + api + migrate, internal. Only the API touches state.
+#   egress  api only, for outbound calls: JWKS, feed ingestion, M-Pesa,
+#           Africa's Talking, Resend.
+#
+# Memory: the whole stack is capped at 500 MB of RAM (sum of the mem_limits:
+# db 160 + api 144 + web 96 + cloudflared 64 + redis 32 = 496). Limits come from
+# load tests on 2 CPU cores; the highest peaks were db 127, api 110 and web 68 MiB,
+# api 95 MiB at 400 concurrent users. CPU runs out long before memory. Each service may also swap up to its limit again
+# (memswap_limit = 2x), so a spike slows down instead of being OOM-killed.
+# `migrate` (96m) runs before api starts and exits, so it does not add to it.
+
+# connection_limit: Prisma's default pool is 2 x CPUs + 1 connections, each a
+# Postgres backend of several MB. Five is plenty for this traffic and keeps the
+# database inside its limit.
+x-db-url: &db-url "postgresql://${POSTGRES_USER:?set POSTGRES_USER in .env}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@db:5432/${POSTGRES_DB:-disruptors}?schema=public&connection_limit=5"
 
 services:
-  postgres:
-    image: postgres:15-alpine
-    container_name: disruptors-postgres
+  db:
+    image: postgres:16-bookworm
+    restart: unless-stopped
+    mem_limit: 160m
+    memswap_limit: 320m
+    # Sized for the 160m limit. The defaults (128MB shared_buffers, 100
+    # connections) assume the database has the machine to itself.
+    command:
+      - postgres
+      - -c
+      - shared_buffers=32MB
+      - -c
+      - effective_cache_size=96MB
+      - -c
+      - work_mem=2MB
+      - -c
+      - maintenance_work_mem=16MB
+      - -c
+      - max_connections=25
+      # SSD storage. The default (4.0) assumes spinning disks and makes index
+      # reads look so expensive that the planner skipped the trigram search
+      # indexes: the search count took 22 ms by scanning, 4.5 ms through them.
+      - -c
+      - random_page_cost=1.1
     environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: disruptors
-    ports:
-      - "5432:5432"
+      POSTGRES_DB: ${POSTGRES_DB:-disruptors}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      # A subdirectory of the mount, not its root: initdb refuses a non-empty
+      # directory, and a bind-mount root can pick up lost+found or host cruft.
+      PGDATA: /var/lib/postgresql/data/pgdata
     volumes:
-      - pgdata:/var/lib/postgresql/data
+      # Bind mount, not a named volume: state is visible and easy to back up.
+      - ./data/postgres:/var/lib/postgresql/data
+    networks: [data]
     healthcheck:
-      test: ["CMD", "pg_isready", "-U", "postgres"]
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 5s
       timeout: 5s
-      retries: 5
+      retries: 12
 
   redis:
     image: redis:7-alpine
-    container_name: disruptors-redis
-    ports:
-      - "6379:6379"
+    restart: unless-stopped
+    mem_limit: 32m
+    memswap_limit: 64m
+    # Bull keeps the ingestion queue here. appendonly so a restart does not lose
+    # queued jobs; noeviction so memory pressure fails an enqueue loudly instead
+    # of silently dropping a job.
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory", "16mb", "--maxmemory-policy", "noeviction"]
     volumes:
-      - redisdata:/data
+      - ./data/redis:/data
+    networks: [data]
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
+      timeout: 3s
+      retries: 12
+
+  # One-shot: applies prisma/migrations, then exits. The API waits for it to
+  # succeed, so a failed migration keeps the old containers serving.
+  # Never run prisma/seed.ts here: it deletes users and organisations.
+  migrate:
+    build:
+      context: .
+      target: migrate
+    image: disruptors-migrate:latest
+    restart: "no"
+    mem_limit: 96m
+    environment:
+      DATABASE_URL: *db-url
+    networks: [data]
+    depends_on:
+      db:
+        condition: service_healthy
+
+  api:
+    build:
+      context: .
+      target: api
+    image: disruptors-api:latest
+    restart: unless-stopped
+    mem_limit: 144m
+    # The host runs other stacks. If it runs out of memory, prefer killing this
+    # container over a neighbour's database.
+    oom_score_adj: 500
+    memswap_limit: 288m
+    env_file: .env
+    environment:
+      # Overrides the localhost values .env carries for local development.
+      DATABASE_URL: *db-url
+      REDIS_URL: redis://redis:6379
+      API_PORT: "4000"
+      # Keep V8's heap under the container limit so it collects garbage
+      # instead of growing until the kernel kills the process.
+      NODE_OPTIONS: --max-old-space-size=96
+      WEB_ORIGIN: https://${PUBLIC_HOSTNAME:?set PUBLIC_HOSTNAME in .env}
+    networks: [data, app, egress]
+    healthcheck:
+      # No /health route yet; a TCP connect shows Nest finished booting.
+      test: ["CMD", "node", "-e", "require('net').connect(4000,'127.0.0.1').on('connect',()=>process.exit(0)).on('error',()=>process.exit(1))"]
+      interval: 10s
       timeout: 5s
-      retries: 5
+      retries: 6
+      start_period: 20s
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
 
-volumes:
-  pgdata:
-  redisdata:
+  web:
+    build:
+      context: .
+      target: web
+    image: disruptors-web:latest
+    restart: unless-stopped
+    mem_limit: 96m
+    oom_score_adj: 500
+    memswap_limit: 192m
+    # Deliberately no env_file: the web server needs none of the API's secrets.
+    environment:
+      # Read at runtime by server components (admin layout). The /api rewrite
+      # was already fixed at build time from the Dockerfile's API_ORIGIN.
+      API_ORIGIN: http://api:4000
+      NODE_OPTIONS: --max-old-space-size=64
+    networks: [app, edge]
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('net').connect(3000,'127.0.0.1').on('connect',()=>process.exit(0)).on('error',()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
+    depends_on:
+      api:
+        condition: service_healthy
 
+  cloudflared:
+    # A pinned release: this is the only container that faces the Internet.
+    image: cloudflare/cloudflared:2025.11.1
+    restart: unless-stopped
+    mem_limit: 64m
+    memswap_limit: 128m
+    # TUNNEL_TOKEN comes from cloudflared.env, kept out of argv and out of .env,
+    # so no other container ever sees it.
+    command: ["tunnel", "--no-autoupdate", "run"]
+    env_file: ./cloudflared.env
+    networks: [edge, app]
+    depends_on:
+      web:
+        condition: service_healthy
+
+networks:
+  edge: {}
+  app:
+    internal: true
+  data:
+    internal: true
+  egress: {}

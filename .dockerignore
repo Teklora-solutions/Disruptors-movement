@@ -1,0 +1,12 @@
+**/node_modules
+**/dist
+**/.next
+.git
+.env
+.env.*
+!.env.example
+cloudflared.env
+data
+credentials
+*.log
+docker-compose*.yml

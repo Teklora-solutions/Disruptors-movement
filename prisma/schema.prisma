@@ -119,6 +119,10 @@ model Event {
   registrations  Registration[]
 
   @@index([organisationId, deletedAt])
+  // Trigram indexes for the public search (ILIKE '%term%' on title/description),
+  // which otherwise scans every event. pg_trgm is enabled by the migration.
+  @@index([title(ops: raw("gin_trgm_ops"))], type: Gin)
+  @@index([description(ops: raw("gin_trgm_ops"))], type: Gin)
 }
 
 model Fellowship {

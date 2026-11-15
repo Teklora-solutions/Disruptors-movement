@@ -8,7 +8,10 @@ export default async function AdminLayout({ children }: { children: React.ReactN
   if (!token) redirect('/signin');
 
   // Fetch user profile (including role) from API
-  const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/members/me`, {
+  // Server-side call, so it goes straight to the API (http://api:4000 in Docker).
+  // Not NEXT_PUBLIC_*: those are frozen into the bundle at build time.
+  const apiOrigin = process.env.API_ORIGIN || 'http://localhost:4000';
+  const res = await fetch(`${apiOrigin}/api/members/me`, {
     headers: { Authorization: `Bearer ${token}` },
     cache: 'no-store', // always fresh for auth checks
   });

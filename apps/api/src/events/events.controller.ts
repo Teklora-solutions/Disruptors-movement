@@ -1,8 +1,9 @@
-import { Controller, Get, Post, Patch, Delete, Param, Query, Body, Req } from '@nestjs/common';
+import { Controller, Get, Post, Patch, Delete, Param, Query, Body, Req, Header } from '@nestjs/common';
 import { Request } from 'express';
 import { EventsService } from './events.service';
 import { CreateEventDto, UpdateEventDto, ListEventsQueryDto } from './dto/event.dto';
 import { Public } from '../auth/public.decorator';
+import { PUBLIC_LIST_CACHE } from '../lib/cache-control';
 
 @Controller('events')
 export class EventsController {
@@ -10,6 +11,7 @@ export class EventsController {
 
   @Public()
   @Get()
+  @Header('Cache-Control', PUBLIC_LIST_CACHE)
   list(@Query() query: ListEventsQueryDto) {
     return this.events.list(query);
   }
