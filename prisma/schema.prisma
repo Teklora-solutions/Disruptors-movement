@@ -1,5 +1,7 @@
 generator client {
   provider = "prisma-client-js"
+  // omitApi: lets PrismaService omit User.passwordHash from every query by default.
+  previewFeatures = ["omitApi"]
 }
 
 datasource db {
@@ -42,6 +44,10 @@ model User {
   name          String?
   providerId    String?
   provider      String?
+  // scrypt$N$r$p$salt$hash (apps/api/src/auth/password.ts). Never serialised to clients or audit logs.
+  passwordHash    String?
+  // Null until the member opens the verification link.
+  emailVerifiedAt DateTime?
   platformRole  PlatformRole    @default(MEMBER)
   createdAt     DateTime        @default(now())
   updatedAt     DateTime        @updatedAt
@@ -56,6 +62,7 @@ model User {
 model MemberProfile {
   id                String   @id @default(cuid())
   userId            String   @unique
+  phone             String?
   county            String?
   interests         String[]
   skills            String[]

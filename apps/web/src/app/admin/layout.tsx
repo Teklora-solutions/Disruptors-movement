@@ -4,7 +4,7 @@ import { redirect } from 'next/navigation';
 
 // Server component protecting /admin routes based on role
 export default async function AdminLayout({ children }: { children: React.ReactNode }) {
-  const token = (await cookies()).get('authToken')?.value;
+  const token = (await cookies()).get('dm_session')?.value;
   if (!token) redirect('/signin');
 
   // Fetch user profile (including role) from API

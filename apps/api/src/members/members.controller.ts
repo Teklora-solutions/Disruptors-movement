@@ -1,18 +1,12 @@
-import { Controller, Post, Body, Get, Patch, Delete, Req, UseGuards } from '@nestjs/common';
+import { Controller, Body, Get, Patch, Delete, Req, Res } from '@nestjs/common';
 import { MembersService } from './members.service';
 import { RegisterMemberDto } from './dto/register-member.dto';
-import { Request } from 'express';
-import { Public } from '../auth/public.decorator';
+import type { Request, Response } from 'express';
+import { clearSessionCookies } from '../auth/cookies';
 
 @Controller('members')
 export class MembersController {
   constructor(private readonly membersService: MembersService) {}
-
-  @Public()
-  @Post('register')
-  async register(@Body() dto: RegisterMemberDto) {
-    return this.membersService.register(dto);
-  }
 
   @Get('me')
   async getMe(@Req() req: Request) {
@@ -27,9 +21,11 @@ export class MembersController {
   }
 
   @Delete('me')
-  async deleteMe(@Req() req: Request) {
+  async deleteMe(@Req() req: Request, @Res({ passthrough: true }) res: Response) {
     const user = (req as any).user;
-    return this.membersService.anonymise(user.id);
+    const result = await this.membersService.anonymise(user.id);
+    clearSessionCookies(res);
+    return result;
   }
 }
 

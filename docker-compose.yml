@@ -14,8 +14,8 @@
 #   edge    cloudflared + web.  Has an Internet route (cloudflared needs it).
 #   app     cloudflared + web + api, internal. How the tunnel and web reach the API.
 #   data    db + redis + api + migrate, internal. Only the API touches state.
-#   egress  api only, for outbound calls: JWKS, feed ingestion, M-Pesa,
-#           Africa's Talking, Resend.
+#   egress  api only, for outbound calls: Gmail SMTP, feed ingestion, M-Pesa,
+#           Africa's Talking.
 #
 # Memory: the whole stack is capped at 500 MB of RAM (sum of the mem_limits:
 # db 160 + api 144 + web 96 + cloudflared 64 + redis 32 = 496). Limits come from
@@ -127,6 +127,8 @@ services:
       # instead of growing until the kernel kills the process.
       NODE_OPTIONS: --max-old-space-size=96
       WEB_ORIGIN: https://${PUBLIC_HOSTNAME:?set PUBLIC_HOSTNAME in .env}
+      # Base of the links in emails (verify, reset, welcome).
+      PUBLIC_URL: https://${PUBLIC_HOSTNAME}
     networks: [data, app, egress]
     healthcheck:
       # No /health route yet; a TCP connect shows Nest finished booting.

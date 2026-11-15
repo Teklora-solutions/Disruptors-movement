@@ -1,15 +1,13 @@
 'use client';
 
-import { useRouter } from 'next/navigation';
 import { useEffect } from 'react';
+import { postJson } from '../lib/auth-client';
 
 export default function SignOutPage() {
-  const router = useRouter();
-
   useEffect(() => {
-    localStorage.removeItem('authToken');
-    router.push('/');
-  }, [router]);
+    // The session cookie is HttpOnly, so only the API can clear it.
+    postJson('/api/auth/logout').finally(() => window.location.assign('/'));
+  }, []);
 
   return (
     <main className="page-shell text-center">

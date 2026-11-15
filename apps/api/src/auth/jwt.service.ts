@@ -1,44 +1,70 @@
-import { Injectable, Logger, UnauthorizedException } from '@nestjs/common';
-import { createRemoteJWKSet, jwtVerify, JWTVerifyOptions } from 'jose';
+import { Injectable, UnauthorizedException } from '@nestjs/common';
+import { SignJWT, jwtVerify, JWTPayload } from 'jose';
+import { SESSION_TTL_SECONDS } from './cookies';
+
+const ISSUER = 'disruptors-movement';
+const ALG = 'HS256';
+
+/** One-time links. Each kind is only accepted where that kind is expected. */
+export type LinkPurpose = 'verify-email' | 'reset-password';
 
 /**
- * Verifies bearer tokens against an external provider's JWKS.
+ * Signs and verifies this app's own tokens with JWT_SECRET.
  *
- * AUTH_JWKS_URI is optional so the site can run before a login provider is
- * chosen. Without it the API starts normally, public routes work, and every
- * signed-in route answers 401 "Sign-in is not configured".
+ * Every token carries a `use` claim: a session token is never accepted as a
+ * reset link, a verification link never as a session, and so on.
  */
 @Injectable()
 export class JwtService {
-  private readonly logger = new Logger(JwtService.name);
-  private readonly jwks: ReturnType<typeof createRemoteJWKSet> | null;
-  private readonly verifyOptions: JWTVerifyOptions = {
-    algorithms: ['RS256'],
-  };
+  private readonly key: Uint8Array;
 
   constructor() {
-    const jwksUri = process.env.AUTH_JWKS_URI?.trim();
-    if (!jwksUri) {
-      this.jwks = null;
-      this.logger.warn('AUTH_JWKS_URI is not set: signed-in routes will answer 401.');
-      return;
+    const secret = process.env.JWT_SECRET ?? '';
+    // Fail at startup rather than sign sessions with a guessable key.
+    if (secret.length < 32 || secret === 'your-secret-here') {
+      throw new Error('JWT_SECRET must be set to a random value of at least 32 characters (openssl rand -base64 48).');
     }
-    // Throws at startup on a malformed URL, which is a config mistake worth
-    // failing loudly on. The keys themselves are fetched on first use.
-    this.jwks = createRemoteJWKSet(new URL(jwksUri));
+    this.key = new TextEncoder().encode(secret);
   }
 
-  async verify(token: string) {
-    if (!this.jwks) {
-      throw new UnauthorizedException('Sign-in is not configured');
-    }
+  /** `fp` ties the session to the current password (see passwordFingerprint). */
+  signSession(userId: string, fp: string): Promise<string> {
+    return this.sign({ use: 'session', fp }, userId, `${SESSION_TTL_SECONDS}s`);
+  }
+
+  /** Throws 401 for anything that is not a valid, unexpired session token. */
+  async verifySession(token: string): Promise<JWTPayload & { sub: string; fp?: string }> {
+    const payload = await this.verify(token, 'session');
+    if (!payload) throw new UnauthorizedException('Your session has expired. Please sign in again.');
+    return payload as JWTPayload & { sub: string; fp?: string };
+  }
+
+  signLink(purpose: LinkPurpose, userId: string, claims: Record<string, string>, ttl: string): Promise<string> {
+    return this.sign({ ...claims, use: purpose }, userId, ttl);
+  }
+
+  /** Null for an expired, tampered or wrong-kind link: callers choose the message. */
+  async verifyLink(token: string, purpose: LinkPurpose): Promise<(JWTPayload & Record<string, unknown>) | null> {
+    return this.verify(token, purpose);
+  }
+
+  private sign(claims: Record<string, string>, sub: string, ttl: string) {
+    return new SignJWT(claims)
+      .setProtectedHeader({ alg: ALG })
+      .setIssuer(ISSUER)
+      .setSubject(sub)
+      .setIssuedAt()
+      .setExpirationTime(ttl)
+      .sign(this.key);
+  }
+
+  private async verify(token: string, use: string) {
     try {
-      const { payload } = await jwtVerify(token, this.jwks, this.verifyOptions);
-      return payload as any; // expected to contain at least `sub`
+      const { payload } = await jwtVerify(token, this.key, { algorithms: [ALG], issuer: ISSUER });
+      if (payload.use !== use || typeof payload.sub !== 'string') return null;
+      return payload;
     } catch {
-      // A malformed, expired or wrongly signed token is the caller's problem
-      // (401), not a server error. jose's own errors would otherwise surface as 500.
-      throw new UnauthorizedException('Invalid or expired token');
+      return null;
     }
   }
 }

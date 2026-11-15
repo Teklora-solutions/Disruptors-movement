@@ -88,13 +88,14 @@ relying on them.
 3. **Secrets.** On the server, in the repo root:
 
    ```bash
-   cp .env.example .env                    # set PUBLIC_HOSTNAME, POSTGRES_*, AUTH_JWKS_URI, API keys
+   cp .env.example .env                    # set PUBLIC_HOSTNAME, POSTGRES_*, JWT_SECRET, SMTP_*
    cp cloudflared.env.example cloudflared.env   # paste the tunnel token only, not the full command
    chmod 600 .env cloudflared.env
    ```
 
-   `AUTH_JWKS_URI` can stay empty until a login provider is chosen. Signed-in
-   routes then answer 401, and everything public works. `.env.example` lists the command that generates each secret. The Postgres
+   `JWT_SECRET` is required: it signs sessions and email links, and the API will
+   not start without it. For email, create a Gmail App Password (see
+   [Email](#email-gmail-smtp)). `.env.example` lists the command that generates each secret. The Postgres
    password is hex because compose puts it into `DATABASE_URL`.
 4. **Start:**
 
@@ -102,6 +103,47 @@ relying on them.
    docker compose up -d --build
    docker compose logs cloudflared   # look for "Registered tunnel connection"
    ```
+
+## Email (Gmail SMTP)
+
+Members sign in with an email and password. The API sends four emails from a
+queue in Redis, retrying up to 5 times with backoff if Gmail is slow or down:
+
+| Email | When |
+|---|---|
+| Confirm your email | On joining. The link works for 24 hours. Sign-in is refused until it is opened. |
+| Welcome | Once the email is confirmed. |
+| Reset your password | From `/forgot-password`. The link works for 1 hour and only once. |
+| You already have an account | When someone joins with an email that is already registered. |
+
+Setup:
+1. On the Gmail account that will send, turn on **2-Step Verification**, then
+   create an **App Password** at myaccount.google.com/apppasswords.
+2. In `.env` set `SMTP_USER` to that address, `SMTP_PASS` to the App Password (no
+   spaces) and `MAIL_FROM`. Keep `SMTP_HOST=smtp.gmail.com` and `SMTP_PORT=465`.
+3. `docker compose up -d api`, join with a real address, and check
+   `docker compose logs api | grep -i mail`. It should show `sent "Confirm your email…"`.
+
+Limits: about 500 recipients a day on a free Gmail account and 2,000 on Google
+Workspace. Past that, Gmail refuses sends for 24 hours (the queue keeps retrying).
+If you outgrow it, any SMTP provider works with the same four variables.
+
+To let members in without confirming their email, set
+`EMAIL_VERIFICATION_REQUIRED=false`. They are then signed in on joining and get
+the welcome email straight away.
+
+Sessions last 7 days, in an HttpOnly cookie. Resetting a password signs out every
+other session for that account. Rotating `JWT_SECRET` signs everyone out.
+
+Passwords are hashed with scrypt (N=2^14, r=8, p=1), about 110 ms of CPU each,
+one at a time, so sign-ins can never take more than one core from the site. On
+2 cores with 300 people browsing, 3 sign-ins a second all succeeded (p95 under
+1 s) and browsing stayed fast. At about 15 a second, roughly 8 got through and
+the rest were told "busy, try again" at once, while browsing p95 stayed at
+236 ms. On a bigger machine, set `PASSWORD_HASH_CONCURRENCY` (default 1) to the
+number of spare cores. To raise the hashing cost, change the constants in
+`apps/api/src/auth/password.ts`: each member's hash is upgraded on their next
+sign-in.
 
 ## Updating
 

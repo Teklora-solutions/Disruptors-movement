@@ -1,8 +1,7 @@
-import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../lib/prisma.service';
 import { RegisterMemberDto } from './dto/register-member.dto';
 import { AuditService } from '../audit/audit.service';
-import { PlatformRole } from '@prisma/client';
 
 @Injectable()
 export class MembersService {
@@ -10,39 +9,6 @@ export class MembersService {
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
   ) {}
-
-  async register(dto: RegisterMemberDto) {
-    if (!dto.consentDataProcessing) {
-      throw new BadRequestException('Data‑processing consent is required');
-    }
-    const user = await this.prisma.user.create({
-      data: {
-        email: dto.email,
-        name: dto.name,
-        providerId: 'local', // placeholder for external auth flow
-        provider: 'local',
-        platformRole: PlatformRole.MEMBER,
-        memberProfile: {
-          create: {
-            county: dto.county,
-            interests: dto.interests ?? [],
-            skills: dto.skills ?? [],
-            consentMarketing: false,
-            consentDataExport: false,
-          },
-        },
-      },
-    });
-    // audit the registration
-    await this.audit.log({
-      action: 'REGISTER_MEMBER',
-      tableName: 'User',
-      recordId: user.id,
-      performedById: user.id,
-      after: user,
-    });
-    return { id: user.id, email: user.email };
-  }
 
   async getMe(userId: string) {
     const user = await this.prisma.user.findUnique({
@@ -87,6 +53,8 @@ export class MembersService {
    * Anonymise personal data while preserving related records (payments, registrations, etc.)
    */
   async anonymise(userId: string) {
+    // updateMany: no error for a member who never had a profile row.
+    await this.prisma.memberProfile.updateMany({ where: { userId }, data: { phone: null } });
     const user = await this.prisma.user.update({
       where: { id: userId },
       data: {
@@ -94,6 +62,9 @@ export class MembersService {
         name: null,
         providerId: null,
         provider: null,
+        // No password: the account can never be signed into again.
+        passwordHash: null,
+        emailVerifiedAt: null,
         // keep role for audit purposes
       },
     });

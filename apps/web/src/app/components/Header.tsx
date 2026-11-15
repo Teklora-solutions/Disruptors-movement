@@ -2,6 +2,8 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import Link from 'next/link';
+import { usePathname } from 'next/navigation';
+import { isSignedIn } from '../lib/auth-client';
 
 const partners = [
   { slug: 'partner-a', name: 'Partner A', tagline: 'Innovating together' },
@@ -10,7 +12,17 @@ const partners = [
   { slug: 'partner-d', name: 'Partner D', tagline: 'Future forward' },
 ];
 
-export default function Header({ isAuthenticated = false }) {
+export default function Header() {
+  const pathname = usePathname();
+  // Read from the non-secret dm_signed_in cookie the API sets next to the
+  // HttpOnly session. Re-checked on every navigation, so signing in or out
+  // updates the header without a full reload.
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [userMenuOpen, setUserMenuOpen] = useState(false);
+  useEffect(() => {
+    setIsAuthenticated(isSignedIn());
+    setUserMenuOpen(false);
+  }, [pathname]);
   const [scrolled, setScrolled] = useState(false);
   const [orgMenuOpen, setOrgMenuOpen] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -42,6 +54,7 @@ export default function Header({ isAuthenticated = false }) {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         setOrgMenuOpen(false);
+        setUserMenuOpen(false);
         setMobileOpen(false);
       }
     };
@@ -131,12 +144,14 @@ export default function Header({ isAuthenticated = false }) {
               className="flex items-center rounded-full bg-deepInk p-2"
               aria-label="User menu"
               aria-haspopup="true"
+              aria-expanded={userMenuOpen}
+              onClick={() => setUserMenuOpen((open) => !open)}
             >
               <svg className="w-6 h-6 text-warmPaper" fill="currentColor" viewBox="0 0 24 24">
                 <path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z" />
               </svg>
             </button>
-            {/* Avatar dropdown – simplified */}
+            {userMenuOpen && (
             <div className="absolute right-0 mt-2 w-48 bg-white dark:bg-deepInk rounded-md shadow-lg py-1">
               <Link href="/dashboard" className="block px-4 py-2 text-sm hover:bg-warmPaper/50 dark:hover:bg-warmPaper/10">
                 Dashboard
@@ -151,6 +166,7 @@ export default function Header({ isAuthenticated = false }) {
                 Sign out
               </Link>
             </div>
+            )}
           </div>
         ) : (
           <Link

@@ -4,7 +4,16 @@ import { Request } from 'express';
 import { JwtService } from './jwt.service';
 import { PUBLIC_KEY } from './public.decorator';
 import { PrismaService } from '../lib/prisma.service';
+import { readCookie, SESSION_COOKIE } from './cookies';
+import { passwordFingerprint } from './password';
 
+/**
+ * Global guard: every route needs a signed-in member unless marked @Public().
+ *
+ * The session comes from the HttpOnly cookie a browser sends, or from an
+ * `Authorization: Bearer` header (the admin layout's server-side fetch forwards
+ * the cookie's value that way).
+ */
 @Injectable()
 export class JwtAuthGuard implements CanActivate {
   constructor(
@@ -22,20 +31,24 @@ export class JwtAuthGuard implements CanActivate {
 
     const request = context.switchToHttp().getRequest<Request>();
     const authHeader = request.headers['authorization'];
-    if (!authHeader?.startsWith('Bearer ')) {
-      throw new UnauthorizedException('Missing Authorization header');
-    }
-    const token = authHeader.split(' ')[1];
-    const payload = await this.jwtService.verify(token);
-    // Load user with org memberships
+    const token =
+      readCookie(request.headers.cookie, SESSION_COOKIE) ??
+      (authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : undefined);
+    if (!token) throw new UnauthorizedException('Please sign in.');
+
+    const payload = await this.jwtService.verifySession(token);
     const user = await this.prisma.user.findUnique({
       where: { id: payload.sub },
       include: { orgMembership: true, memberProfile: true },
+      omit: { passwordHash: false },
     });
-    if (!user) throw new UnauthorizedException('User not found');
-    // attach to request
-    (request as any).user = user;
+    // A password change (reset) changes the fingerprint, which signs out every
+    // other session holding the old one.
+    if (!user?.passwordHash || payload.fp !== passwordFingerprint(user.passwordHash)) {
+      throw new UnauthorizedException('Your session has expired. Please sign in again.');
+    }
+    const { passwordHash: _omit, ...safeUser } = user;
+    (request as any).user = safeUser;
     return true;
   }
 }
-

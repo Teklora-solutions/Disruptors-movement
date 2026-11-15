@@ -1,74 +1,99 @@
 'use client';
 
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
-import { FormEvent, useState } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
+import { FormEvent, Suspense, useState } from 'react';
+import AuthCard, { inputClass, labelClass, Notice } from '../components/AuthCard';
+import { postJson, safeNext } from '../lib/auth-client';
 
-export default function SignInPage() {
+function SignInForm() {
   const router = useRouter();
+  const params = useSearchParams();
   const [form, setForm] = useState({ email: '', password: '' });
   const [error, setError] = useState('');
+  const [unverified, setUnverified] = useState(false);
+  const [resent, setResent] = useState(false);
+  const [busy, setBusy] = useState(false);
 
   const handleSubmit = async (event: FormEvent) => {
     event.preventDefault();
-
+    setError('');
+    setUnverified(false);
     if (!form.email || !form.password) {
       setError('Please provide both email and password.');
       return;
     }
+    setBusy(true);
+    const res = await postJson('/api/auth/login', form);
+    setBusy(false);
+    if (res.ok) {
+      // Full navigation so server components (admin layout) see the new cookie.
+      window.location.assign(safeNext(params.get('next')));
+      return;
+    }
+    if (res.status === 403 && res.data?.code === 'email_not_verified') setUnverified(true);
+    setError(res.error);
+  };
 
-    localStorage.setItem('authToken', 'demo-token');
-    router.push('/dashboard');
+  const resend = async () => {
+    await postJson('/api/auth/resend-verification', { email: form.email });
+    setResent(true);
   };
 
   return (
-    <main className="page-shell flex min-h-[calc(100vh-80px)] items-center justify-center">
-      <div className="grid w-full max-w-4xl overflow-hidden rounded-[30px] border border-gray-200 bg-white/80 shadow-[0_24px_60px_rgba(15,23,42,0.08)] backdrop-blur-sm lg:grid-cols-2">
-        <div className="bg-deepInk p-8 text-warmPaper sm:p-10">
-          <p className="text-sm uppercase tracking-[0.2em] text-orange-200">Welcome back</p>
-          <h1 className="mt-4 text-4xl font-bold tracking-[-0.05em]">Sign in to continue.</h1>
-          <p className="mt-4 max-w-sm text-orange-100">
-            Access your dashboard, tickets and opportunities across the Disruptors Movement.
-          </p>
+    <AuthCard
+      eyebrow="Welcome back"
+      title="Sign in to continue."
+      blurb="Access your dashboard, tickets and opportunities across the Disruptors Movement."
+    >
+      <form onSubmit={handleSubmit} className="space-y-5" noValidate>
+        {params.get('verify') === 'expired' && (
+          <Notice tone="error">That confirmation link is invalid or has expired. Sign in to get a new one.</Notice>
+        )}
+        {params.get('reset') === '1' && <Notice tone="success">Your password has been changed.</Notice>}
+        <div>
+          <label htmlFor="email" className={labelClass}>Email</label>
+          <input id="email" type="email" autoComplete="email" value={form.email} className={inputClass}
+            onChange={(e) => setForm((f) => ({ ...f, email: e.target.value }))} />
+        </div>
+        <div>
+          <div className="mb-2 flex items-center justify-between">
+            <label htmlFor="password" className="text-sm font-medium text-gray-700">Password</label>
+            <Link href="/forgot-password" className="text-sm font-medium text-vividOrange">Forgot password?</Link>
+          </div>
+          <input id="password" type="password" autoComplete="current-password" value={form.password} className={inputClass}
+            onChange={(e) => setForm((f) => ({ ...f, password: e.target.value }))} />
         </div>
 
-        <form onSubmit={handleSubmit} className="space-y-5 p-6 sm:p-8">
-          <div>
-            <label htmlFor="email" className="mb-2 block text-sm font-medium text-gray-700">Email</label>
-            <input
-              id="email"
-              type="email"
-              value={form.email}
-              onChange={(event) => setForm((current) => ({ ...current, email: event.target.value }))}
-              className="w-full rounded-xl border border-gray-300 bg-white px-3 py-3 text-base outline-none transition focus:border-vividOrange focus:ring-2 focus:ring-orange-100"
-            />
-          </div>
+        {error && (
+          <Notice tone="error">
+            {error}
+            {unverified && !resent && (
+              <button type="button" onClick={resend} className="mt-2 block font-semibold text-vividOrange underline">
+                Send the confirmation email again
+              </button>
+            )}
+            {resent && <span className="mt-2 block">Sent. Check your inbox (and spam folder).</span>}
+          </Notice>
+        )}
 
-          <div>
-            <label htmlFor="password" className="mb-2 block text-sm font-medium text-gray-700">Password</label>
-            <input
-              id="password"
-              type="password"
-              value={form.password}
-              onChange={(event) => setForm((current) => ({ ...current, password: event.target.value }))}
-              className="w-full rounded-xl border border-gray-300 bg-white px-3 py-3 text-base outline-none transition focus:border-vividOrange focus:ring-2 focus:ring-orange-100"
-            />
-          </div>
+        <button type="submit" disabled={busy} className="primary-btn w-full disabled:opacity-60">
+          {busy ? 'Signing in…' : 'Sign in'}
+        </button>
 
-          {error ? <p className="text-sm text-red-600">{error}</p> : null}
+        <p className="text-center text-sm text-gray-600">
+          New here?{' '}
+          <Link href="/join" className="font-semibold text-vividOrange">Join the movement</Link>
+        </p>
+      </form>
+    </AuthCard>
+  );
+}
 
-          <button type="submit" className="primary-btn w-full">
-            Sign in
-          </button>
-
-          <p className="text-center text-sm text-gray-600">
-            New here?{' '}
-            <Link href="/join" className="font-semibold text-vividOrange">
-              Join the movement
-            </Link>
-          </p>
-        </form>
-      </div>
-    </main>
+export default function SignInPage() {
+  return (
+    <Suspense>
+      <SignInForm />
+    </Suspense>
   );
 }

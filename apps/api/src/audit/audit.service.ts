@@ -2,9 +2,18 @@ import { Injectable } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../lib/prisma.service';
 
-/** Convert any value (Dates, Prisma rows) into something Prisma accepts as Json. */
+/** Never written to the audit log, wherever they appear in a row. */
+const REDACTED_KEYS = new Set(['passwordHash']);
+
+/**
+ * Convert any value (Dates, Prisma rows) into something Prisma accepts as Json.
+ * PrismaService already omits passwordHash from queries; this catches a row that
+ * was loaded with it on purpose (the auth code) and then audited.
+ */
 const toJson = (v: unknown): Prisma.InputJsonValue | typeof Prisma.JsonNull =>
-  v === undefined || v === null ? Prisma.JsonNull : (JSON.parse(JSON.stringify(v)) as Prisma.InputJsonValue);
+  v === undefined || v === null
+    ? Prisma.JsonNull
+    : (JSON.parse(JSON.stringify(v, (key, value) => (REDACTED_KEYS.has(key) ? undefined : value))) as Prisma.InputJsonValue);
 
 @Injectable()
 export class AuditService {
