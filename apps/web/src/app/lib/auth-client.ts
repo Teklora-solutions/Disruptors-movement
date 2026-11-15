@@ -38,3 +38,31 @@ function errorMessage(status: number, data: any): string {
 export function safeNext(next: string | null | undefined, fallback = '/dashboard'): string {
   return next && next.startsWith('/') && !next.startsWith('//') ? next : fallback;
 }
+
+/**
+ * GET JSON as the signed-in member. A 401 (expired or signed-out session)
+ * sends them to sign-in and back here afterwards.
+ */
+export async function getMemberJson<T>(path: string): Promise<T> {
+  const res = await fetch(path, { credentials: 'same-origin', cache: 'no-store' });
+  if (res.status === 401) {
+    window.location.assign(`/signin?next=${encodeURIComponent(window.location.pathname)}`);
+    return new Promise<T>(() => {}); // navigation is under way; never resolve
+  }
+  if (!res.ok) throw new Error(`Request failed (${res.status})`);
+  return res.json();
+}
+
+const dateFormat = new Intl.DateTimeFormat('en-KE', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' });
+const timeFormat = new Intl.DateTimeFormat('en-KE', { hour: 'numeric', minute: '2-digit', hour12: true });
+
+/** "phone, county and skills" */
+export function listWithAnd(items: string[]): string {
+  return items.length <= 1 ? items.join('') : `${items.slice(0, -1).join(', ')} and ${items.at(-1)}`;
+}
+
+/** "Sat, 22 Nov 2026 • 2:00 pm" */
+export function formatEventDate(iso: string): string {
+  const d = new Date(iso);
+  return `${dateFormat.format(d)} • ${timeFormat.format(d)}`;
+}

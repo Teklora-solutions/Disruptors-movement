@@ -1,6 +1,6 @@
 import { Controller, Body, Get, Patch, Delete, Req, Res } from '@nestjs/common';
 import { MembersService } from './members.service';
-import { RegisterMemberDto } from './dto/register-member.dto';
+import { UpdateProfileDto } from './dto/update-profile.dto';
 import type { Request, Response } from 'express';
 import { clearSessionCookies } from '../auth/cookies';
 
@@ -14,8 +14,13 @@ export class MembersController {
     return this.membersService.getMe(user.id);
   }
 
+  @Get('me/dashboard')
+  async dashboard(@Req() req: Request) {
+    return this.membersService.dashboard((req as any).user.id);
+  }
+
   @Patch('me')
-  async updateMe(@Req() req: Request, @Body() updates: Partial<RegisterMemberDto>) {
+  async updateMe(@Req() req: Request, @Body() updates: UpdateProfileDto) {
     const user = (req as any).user;
     return this.membersService.updateMe(user.id, updates);
   }

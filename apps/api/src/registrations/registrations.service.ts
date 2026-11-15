@@ -109,7 +109,8 @@ export class RegistrationsService {
   async myRegistrations(userId: string) {
     return this.prisma.registration.findMany({
       where: { userId },
-      include: { event: true },
+      include: { event: { include: { organisation: { select: { name: true, slug: true } } } } },
+      orderBy: { event: { startsAt: 'asc' } },
     });
   }
 
