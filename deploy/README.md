@@ -93,8 +93,8 @@ relying on them.
    chmod 600 .env cloudflared.env
    ```
 
-   `AUTH_JWKS_URI` is required: the API refuses to start without it.
-   `.env.example` lists the command that generates each secret. The Postgres
+   `AUTH_JWKS_URI` can stay empty until a login provider is chosen. Signed-in
+   routes then answer 401, and everything public works. `.env.example` lists the command that generates each secret. The Postgres
    password is hex because compose puts it into `DATABASE_URL`.
 4. **Start:**
 
